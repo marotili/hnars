@@ -30,15 +30,26 @@ data Knowledge = Knowledge
   , _kExtensions :: Map.Map Term Extension
   , _kIntensions :: Map.Map Term Intension
   } deriving (Show)
+makeLenses ''Knowledge
   
+intensions :: Term -> Set.Set Statement -> [Statement]
+intensions term stmts = [st | st@(StatementInherit _ p) <- Set.toList stmts, p == term]
+
+extensions :: Term -> Set.Set Statement -> [Statement]
+extensions term stmts = [st | st@(StatementInherit s _) <- Set.toList stmts, s == term]
+           
+queryIntensions :: Term -> Knowledge -> [Statement]
+queryIntensions t k = intensions t (k^.kStatements)
+
+queryExtensions :: Term -> Knowledge -> [Statement]
+queryExtensions t k = extensions t (k^.kStatements)
+                
 newStmt :: String -> String -> Statement
 newStmt left right = StatementInherit (Term left) (Term right)
  
 newKnowledge :: Set.Set Statement -> Knowledge 
 newKnowledge stmts = Knowledge stmts Map.empty Map.empty
   
-makeLenses ''Knowledge
-
 transHull :: Knowledge -> Knowledge           
 transHull knowledge =
   let 
@@ -63,7 +74,9 @@ deduce :: Statement -> Statement -> Maybe Statement
 deduce (StatementInherit m1 p) (StatementInherit s m2) | m1 == m2 && s /= p = Just (StatementInherit s p)
 deduce (StatementInherit p m1) (StatementInherit m2 s) | m1 == m2 && s /= p = Just (StatementInherit p s)
 deduce _ _ = Nothing
-     
+       
+knowledge = newKnowledge $ Set.fromList [newStmt "robin" "bird", newStmt "bird" "animal", newStmt "water" "liquid"]
+
 main :: IO ()
 main = do
   let knowledge = newKnowledge $ Set.fromList [newStmt "robin" "bird", newStmt "bird" "animal", newStmt "water" "liquid"]
