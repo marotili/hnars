@@ -14,6 +14,7 @@ import           Data.PSQueue
        
 import           Control.Concurrent
 import           PrioritySync.PrioritySync
+
 data Term = Term String 
   deriving (Show,
   Eq, Ord)
@@ -58,9 +59,13 @@ data Concept = Concept
   , _cExtension :: Extension
   , _cIntension :: Intension
   , _cTerm :: Term
+  , _cPriority :: Float
   }
-  
+
 makeLenses ''Concept
+
+instance Measured Max Concept where
+  measure c = Max (c^.cPriority) 0 (c^.cPriority)
   
 instance Eq Concept where
   c1 == c2 = (c1^.cTerm) == (c2^.cTerm)
@@ -69,7 +74,7 @@ instance Ord Concept where
   c1 <= c2 = (c1^.cTerm) <= (c2^.cTerm)
   
 data Knowledge = Knowledge
- { _kStatements :: Set.Set Judgement
+  { _kStatements :: Set.Set Judgement
   , _kExtensions :: Map.Map Term Extension
   , _kIntensions :: Map.Map Term Intension
   } deriving (Show)
@@ -158,14 +163,14 @@ newKnowledge stmts = Knowledge stmts Map.empty Map.empty
 --   print $ transHull knowledge
 
 type Priority = Float
-     
+
 data Bag k a = Bag
-  { _prioQueue :: PSQ k Priority
+  { _prioQueue :: PrioQueue a
   , _keyHash :: Map.Map k a
   }
   
 type ConceptBag = Bag Term Concept 
-
+type JudgementBag = Bag Term Judgement
      
 main = do
   return () 

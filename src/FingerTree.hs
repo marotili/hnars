@@ -2,20 +2,35 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
-module FingerTree where
-       
+module FingerTree 
+( insertPrio
+, takeRnd
+, FingerTree(Empty)
+, Measured
+, Max(..)
+, measure
+, PrioQueue
+)
+where
+
 --import           Control.Lens hiding ((<|))
 import Data.Monoid       
 import Debug.Trace
+
+type PrioQueue a = FingerTree Max a
        
 class Monoid v => Measured v a where
   measure :: a -> v
   
-newtype Max = Max Float deriving (Show, Eq, Ord)
+data Max = Max 
+  { maxPriority :: Float
+  , maxSize :: Int
+  , maxPrioSum :: Float
+  } deriving (Show, Eq, Ord)
         
 instance Monoid Max where
-  mempty = Max 0
-  mappend (Max a) (Max b) = Max (max a b)
+  mempty = Max 0 0 0
+  mappend (Max a sa c) (Max b sb d) = Max (max a b) (sa + sb) (c + d)
 
 data Node v a = Node2 v a a
               | Node3 v a a a
@@ -76,39 +91,70 @@ a |> (Single v b) = Deep (measure a <> v) [b] Empty [a]
 a |> (Deep v lf m [b, c, d, e]) = Deep (measure a <> v) lf (node3 b c d |> m) [e, a]
 a |> (Deep v lf m sf) = Deep (measure a <> v) lf m (sf ++ [a])
   
-insertPrio :: (Show a, Measured Max a) => a -> FingerTree Max a -> FingerTree Max a
-insertPrio a Empty = a <| Empty
-insertPrio a (Single v b) | measure a > v = Deep (measure a <> v) [a] Empty [b]
+insertPrio' :: (Show a, Measured Max a) => a -> FingerTree Max a -> FingerTree Max a
+insertPrio' a Empty = a <| Empty
+insertPrio' a (Single v b) | measure a > v = Deep (measure a <> v) [a] Empty [b]
                           | otherwise = Deep (measure a <> v) [b] Empty [a]
-insertPrio a t@(Deep v lf m sf) | measure a > v = a <| t
+insertPrio' a t@(Deep v lf m sf) | measure a > v = a <| t 
                                 | otherwise = let (l, r) = split2 (measure a) t
-                                              in traceShow (l, r) $ a |> l >< r
+                                              in a |> l >< r
+
+removeRight :: (Measured v a) => FingerTree v a -> FingerTree v a
+removeRight (Single _ x) = Empty
+removeRight (Deep _ a m [b]) = deepR a m []
+removeRight (Deep _ a m bs) = Deep (measure a <> measure m <> measure (init bs)) a m (init bs)
+
+removeLeft :: (Measured v a) => FingerTree v a -> FingerTree v a
+removeLeft (Single _ x) = Empty
+removeLeft (Deep _ [a] m bs) = deepL [] m bs
+removeLeft (Deep _ as m bs) = Deep (measure (tail as) <> measure m <> measure bs) (tail as) m bs
+
+ftHead :: FingerTree v a -> a
+ftHead Empty = error "No elementss available"
+ftHead (Single _ x) = x
+ftHead (Deep _ as m bs) = head as
+
+maxPrioSize = 100 :: Int
+
+insertPrio a t | maxSize (measure t') > maxPrioSize = removeRight t' 
+               | otherwise = t'
+  where t' = insertPrio' a t
+
+takeHead :: (Measured v a) => FingerTree v a -> (a, FingerTree v a)
+takeHead t = (ftHead t, removeLeft t)
+
+-- | TODO implement rnd
+takeRnd :: (Measured Max a) => FingerTree Max a -> (a, FingerTree Max a)
+takeRnd t = (head, tail)
+  where prioSum = maxPrioSum (measure t)
+        (head, tail) = takeHead t
            
 instance Measured Max Float where
-  measure f = Max f
+  measure f = Max f 1 f
 
 t = do
   let t = Empty
-  let prios = [0.5, 0.4, 0.3, 0.8, 0.55, 0.55, 0.1, 0.9::Float, 0.55]
+  let prios = [0.5, 0.4, 0.3, 0.8, 0.55, 0.55, 0.1, 0.9::Float, 0.55, 0.88, 0.99, 0.05]
   let t' = foldr (insertPrio) t prios
-  print t'
+  let t'' = takeRnd t'
+  print t''
            
 split :: (Show a, Show v, Measured v a) => (v -> Bool) -> FingerTree v a -> (FingerTree v a, FingerTree v a)
 split p Empty = (Empty, Empty)
 split p xs | p (measure xs) = (l, x <| r)
-           | otherwise = traceShow ("otherwise") $ (xs, Empty)
+           | otherwise = (xs, Empty)
   where Split l x r = splitTree p mempty xs          
 
 split2 :: (Show a, Measured Max a) => Max -> FingerTree Max a -> (FingerTree Max a, FingerTree Max a)
 split2 p Empty = (Empty, Empty)
-split2 p xs = if p > measure x then (l, x <| r) else (x |> l, r)
+split2 p xs = if p >= measure x then (l, x <| r) else (x |> l, r)
   where Split l x r = splitTree2 p xs      
 
 (<||) :: (Measured v a) => [a] -> FingerTree v a -> FingerTree v a
 (<||) xs t = foldr (<|) t xs
       
 (||>) :: (Measured v a) => [a] -> FingerTree v a -> FingerTree v a
-(||>) xs t = foldr (|>) t xs
+(||>) xs t = foldr (|>) t (reverse xs)
   
 app3 :: (Measured v a) => FingerTree v a -> [a] -> FingerTree v a -> FingerTree v a
 app3 Empty ts xs = ts <|| xs
@@ -141,41 +187,39 @@ splitDigit p i (a:as) | p i' = Split [] a as
   
 splitDigit2 :: (Measured Max a) => Max -> Digit a -> Split [] a
 splitDigit2 p [a] = Split [] a []
-splitDigit2 p (a:as) | p > (measure a) = Split [] a as
+splitDigit2 p (a:as) | p >= (measure a) = Split [] a as
                      | otherwise = let Split l x r = splitDigit2 p as in Split (a:l) x r
   
 splitTree :: (Show v, Show a, Measured v a) => (v -> Bool) -> v -> FingerTree v a -> Split (FingerTree v) a
-splitTree p i (Single _ x) = traceShow ("single", x) $ Split Empty x Empty
+splitTree p i (Single _ x) = Split Empty x Empty
 splitTree p i (Deep _ pr m sf) | p vpr = let Split l x r = splitDigit p i pr
-                                         in traceShow ("p vpr", vpr) $ Split (toTree l) x (deepL r m sf)
+                                         in Split (toTree l) x (deepL r m sf)
                                | p vm = let Split ml xs mr = splitTree p vpr m
                                             Split l x r = splitDigit p (vpr `mappend` measure ml) (toList xs)
-                                        in traceShow ("p vm", vm) $ Split (deepR pr m l) x (deepL r mr sf)
+                                        in Split (deepR pr m l) x (deepL r mr sf)
                                | otherwise = let Split l x r = splitDigit p vm sf
-                                             in traceShow ("otherwise") $ Split (deepR pr m l) x (toTree r)
+                                             in Split (deepR pr m l) x (toTree r)
   where vpr = i `mappend` measure pr
         vm = vpr `mappend` measure m
        
 splitTree2 :: (Show a, Measured Max a) => Max -> FingerTree Max a -> Split (FingerTree Max) a
 splitTree2 p (Single _ x) = Split Empty x Empty
-splitTree2 p (Deep _ pr Empty sf) | p > (measure pr) = let Split l x r = splitDigit2 p pr
-                                                       in Split (toTree l) x (toTree $ r ++ sf)
-                                  | p > (measure sf) = let Split l x r = splitDigit2 p pr
-                                                       in Split (toTree l) x (toTree $ r ++ sf)
+splitTree2 p (Deep _ pr Empty sf) | p >= (measure pr) = let Split l x r = splitDigit2 p pr
+                                                        in Split (toTree l) x (toTree $ r ++ sf)
+                                  | p >= (measure sf) = let Split l x r = splitDigit2 p pr
+                                                        in Split (toTree l) x (toTree $ r ++ sf)
                                   | otherwise = let Split l x r = splitDigit2 p sf
                                                 in Split (toTree $ pr ++ l) x (toTree r)
 
-splitTree2 p (Deep _ pr m sf) | p > vpr = let Split l x r = splitDigit2 p pr
-                                        in traceShow ("p vpr") $ Split (toTree l) x (deepL r m sf)
-                              | p > (measure m) = let Split l x r = splitDigit2 p pr
-                                                in  traceShow ("p m m") $ Split (toTree l) x (deepL r m sf)
-                              | p > (measure sf) = let Split ml xs mr = splitTree2 p m
-                                                       Split l x r = splitDigit2 p (toList xs)
-                                                   in traceShow ("p m sf") $ Split (deepR pr ml l) x (deepL r mr sf)
+splitTree2 p (Deep _ pr m sf) | p >= (measure pr) = let Split l x r = splitDigit2 p pr
+                                           in Split (toTree l) x (deepL r m sf)
+                              | p >= (measure m) = let Split l x r = splitDigit2 p pr
+                                                   in Split (toTree l) x (deepL r m sf)
+                              | p >= (measure sf) = let Split ml xs mr = splitTree2 p m
+                                                        Split l x r = splitDigit2 p (toList xs)
+                                                    in Split (deepR pr ml l) x (deepL r mr sf)
                               | otherwise = let Split l x r = splitDigit2 p sf
-                                            in traceShow ("otherwise") $ Split (deepR pr m l) x (toTree r)
-           
-  where vpr = measure pr
+                                            in Split (deepR pr m l) x (toTree r)
   
 data View s a = Nil | Cons a (s a)
 viewL :: (Measured v a) => FingerTree v a -> View (FingerTree v) a
